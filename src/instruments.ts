@@ -1,0 +1,33 @@
+export interface InstrumentItem {
+  symbol: string;
+  displayName: string;
+  market: string;
+  description: string;
+}
+
+export const instruments: InstrumentItem[] = [
+  {
+    symbol: "159980",
+    displayName: "大成有色ETF",
+    market: "SZ",
+    description: "有色金属主题",
+  },
+  {
+    symbol: "513100",
+    displayName: "国泰纳指ETF",
+    market: "SH",
+    description: "纳斯达克指数",
+  },
+  {
+    symbol: "513350",
+    displayName: "富国标普油气ETF",
+    market: "SH",
+    description: "富国标普油气ETF",
+  },
+  {
+    symbol: "159326",
+    displayName: "华夏电网设备ETF",
+    market: "SZ",
+    description: "华夏电网设备ETF",
+  },
+];
