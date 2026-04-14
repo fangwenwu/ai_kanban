@@ -22,6 +22,16 @@ export interface TrendAnalysisPayload {
     trendLabel: string;
     summary: string;
     sidewaysSignals: string[];
+    advice: {
+      action: "买入" | "卖出" | "观望";
+      confidence: "高" | "中" | "低";
+      targetPrice: number | null;
+      stopPrice: number | null;
+      holdingWindow: string;
+      reasonTags: string[];
+      rationale: string;
+      riskNote: string;
+    };
     indicators: {
       ma: {
         state: string;

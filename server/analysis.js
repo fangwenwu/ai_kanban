@@ -391,6 +391,244 @@ function buildSummary(trendLabel, indicators, sidewaysSignals, patternState, vol
   return `当前更接近下跌趋势，${indicators.ma.state}、MACD ${indicators.macd.state}/${indicators.macd.zeroAxis}，RSI 处于 ${indicators.rsi.state} 区间，量价关系表现为${volumeState.relation}。`;
 }
 
+function toReasonTags({
+  ma,
+  macd,
+  rsi,
+  boll,
+  volume,
+  pattern,
+  capital,
+  sidewaysSignals,
+}) {
+  const tags = [];
+
+  if (ma.state === "多头排列" || ma.state === "空头排列") {
+    tags.push(ma.state);
+  } else if (ma.state === "粘合缠绕") {
+    tags.push("均线粘合");
+  }
+
+  tags.push(
+    macd.bias === "偏多"
+      ? "MACD偏多"
+      : macd.bias === "偏空"
+        ? "MACD偏空"
+        : "MACD中性",
+  );
+
+  if (rsi.value >= 40 && rsi.value <= 60) {
+    tags.push("RSI横盘");
+  } else {
+    tags.push(`RSI${rsi.state}`);
+  }
+
+  tags.push(boll.state === "收口" ? "BOLL收口" : boll.position);
+
+  if (volume.relation !== "量价平衡") {
+    tags.push(volume.relation);
+  }
+
+  if (pattern.pattern !== "整理") {
+    tags.push(pattern.pattern);
+  }
+
+  tags.push(capital.mainForceNetAmount >= 0 ? "主力净流入" : "主力净流出");
+
+  if (sidewaysSignals.length >= 3) {
+    tags.unshift("横盘信号密集");
+  }
+
+  return [...new Set(tags)].slice(0, 6);
+}
+
+function countDirectionalSignals({ ma, macd, rsi, volume, pattern, capital }) {
+  let bullish = 0;
+  let bearish = 0;
+
+  if (ma.bias === "偏多") {
+    bullish += 1;
+  } else if (ma.bias === "偏空") {
+    bearish += 1;
+  }
+
+  if (macd.bias === "偏多") {
+    bullish += 1;
+  } else if (macd.bias === "偏空") {
+    bearish += 1;
+  }
+
+  if (rsi.bias === "偏多") {
+    bullish += 1;
+  } else if (rsi.bias === "偏空") {
+    bearish += 1;
+  }
+
+  if (volume.relation === "价涨量增") {
+    bullish += 1;
+  } else if (volume.relation === "价跌量增") {
+    bearish += 1;
+  }
+
+  if (pattern.pattern === "突破") {
+    bullish += 1;
+  } else if (pattern.pattern === "破位") {
+    bearish += 1;
+  }
+
+  if (capital.mainForceNetAmount >= 0) {
+    bullish += 1;
+  } else {
+    bearish += 1;
+  }
+
+  return { bullish, bearish };
+}
+
+function resolveAdviceAction({ ma, macd, rsi, sidewaysSignals, signalCounts }) {
+  if (sidewaysSignals.length >= 3) {
+    return { action: "观望", confidence: "低" };
+  }
+
+  const coreBullish =
+    ma.bias === "偏多" && macd.bias === "偏多" && rsi.bias === "偏多";
+  const coreBearish =
+    ma.bias === "偏空" && macd.bias === "偏空" && rsi.bias === "偏空";
+
+  if (coreBullish) {
+    return {
+      action: "买入",
+      confidence: signalCounts.bullish - signalCounts.bearish >= 3 ? "高" : "中",
+    };
+  }
+
+  if (coreBearish) {
+    return {
+      action: "卖出",
+      confidence: signalCounts.bearish - signalCounts.bullish >= 3 ? "高" : "中",
+    };
+  }
+
+  if (signalCounts.bullish - signalCounts.bearish >= 2) {
+    return { action: "买入", confidence: "中" };
+  }
+
+  if (signalCounts.bearish - signalCounts.bullish >= 2) {
+    return { action: "卖出", confidence: "中" };
+  }
+
+  return { action: "观望", confidence: "低" };
+}
+
+function pickClosestLevel(levels, predicate, compare) {
+  const filtered = levels.filter(
+    (value) => value != null && Number.isFinite(value) && predicate(value),
+  );
+
+  if (!filtered.length) {
+    return null;
+  }
+
+  return filtered.sort(compare)[0];
+}
+
+function resolveAdvicePriceLevels({ action, liveQuote, bars, ma20, boll }) {
+  const recentBars = bars.slice(-20);
+  const highest20 = Math.max(...recentBars.map((bar) => bar.high));
+  const lowest20 = Math.min(...recentBars.map((bar) => bar.low));
+  const currentPrice = liveQuote.price;
+
+  if (action === "买入") {
+    const targetPrice = pickClosestLevel(
+      [boll.upper, highest20],
+      (value) => value >= currentPrice,
+      (left, right) => left - right,
+    );
+    const stopPrice = pickClosestLevel(
+      [ma20, boll.middle, lowest20],
+      (value) => value < currentPrice,
+      (left, right) => right - left,
+    );
+
+    if (targetPrice == null || stopPrice == null) {
+      return null;
+    }
+
+    return {
+      targetPrice: round(targetPrice, 3),
+      stopPrice: round(stopPrice, 3),
+    };
+  }
+
+  if (action === "卖出") {
+    const targetPrice = pickClosestLevel(
+      [boll.lower, lowest20],
+      (value) => value <= currentPrice,
+      (left, right) => right - left,
+    );
+    const stopPrice = pickClosestLevel(
+      [ma20, boll.middle, highest20],
+      (value) => value > currentPrice,
+      (left, right) => left - right,
+    );
+
+    if (targetPrice == null || stopPrice == null) {
+      return null;
+    }
+
+    return {
+      targetPrice: round(targetPrice, 3),
+      stopPrice: round(stopPrice, 3),
+    };
+  }
+
+  return {
+    targetPrice: null,
+    stopPrice: null,
+  };
+}
+
+function resolveHoldingWindow(action, confidence) {
+  if (action === "观望") {
+    return "1-3个交易日观察";
+  }
+
+  if (confidence === "高") {
+    return "1-2周";
+  }
+
+  return "3-5个交易日";
+}
+
+function buildAdviceCopy({
+  action,
+  confidence,
+  reasonTags,
+  downgradedForInvalidLevels = false,
+}) {
+  if (action === "观望") {
+    if (downgradedForInvalidLevels) {
+      return {
+        rationale: "当前方向信号虽有倾向，但目标空间不清晰或失效价不成立，暂不建议直接操作。",
+        riskNote: "等待更清晰的支撑阻力区间后，再重新评估当前建议。",
+      };
+    }
+
+    return {
+      rationale: "当前横盘或多空信号冲突，暂不建议直接操作，优先等待突破或破位确认。",
+      riskNote: "若突破观察区间上沿或跌破下沿，需要重新评估趋势方向。",
+    };
+  }
+
+  const directionText = action === "买入" ? "上方压力位" : "下方支撑位";
+  const invalidationText = action === "买入" ? "跌破失效价" : "反抽站回失效价";
+
+  return {
+    rationale: `当前建议${action}，置信度${confidence}，主要依据包括 ${reasonTags.join("、")}，目标价参考${directionText}。`,
+    riskNote: `${invalidationText} 或核心指标反向时，需重新评估当前建议。`,
+  };
+}
+
 export function parseTencentHistoryPayload(payload, symbol) {
   const exchangePrefix = getSecIdBySymbol(symbol).startsWith("1.") ? "sh" : "sz";
   const rows = payload?.data?.[`${exchangePrefix}${symbol}`]?.qfqday
@@ -548,6 +786,59 @@ export function evaluateTrendFromHistory(
   const mainForceDirection = mainForceNetAmount >= 0
     ? capitalSnapshot ? "净流入" : "净流入估算"
     : capitalSnapshot ? "净流出" : "净流出估算";
+  const signalCounts = countDirectionalSignals({
+    ma,
+    macd,
+    rsi,
+    volume,
+    pattern,
+    capital: {
+      mainForceNetAmount,
+    },
+  });
+  const adviceBase = resolveAdviceAction({
+    ma,
+    macd,
+    rsi,
+    sidewaysSignals,
+    signalCounts,
+  });
+  const adviceReasonTags = toReasonTags({
+    ma,
+    macd,
+    rsi,
+    boll,
+    volume,
+    pattern,
+    capital: {
+      mainForceNetAmount,
+    },
+    sidewaysSignals,
+  });
+  const priceLevels = resolveAdvicePriceLevels({
+    action: adviceBase.action,
+    liveQuote,
+    bars,
+    ma20: ma20Series.at(-1) ?? closes.at(-1) ?? 0,
+    boll: boll.value,
+  });
+  const adviceAction =
+    adviceBase.action !== "观望" && priceLevels == null
+      ? "观望"
+      : adviceBase.action;
+  const downgradedForInvalidLevels =
+    adviceBase.action !== "观望" && priceLevels == null;
+  const adviceConfidence =
+    adviceAction === "观望" ? "低" : adviceBase.confidence;
+  const advicePriceLevels = adviceAction === "观望"
+    ? { targetPrice: null, stopPrice: null }
+    : priceLevels;
+  const adviceCopy = buildAdviceCopy({
+    action: adviceAction,
+    confidence: adviceConfidence,
+    reasonTags: adviceReasonTags,
+    downgradedForInvalidLevels,
+  });
 
   return {
     trendLabel,
@@ -570,6 +861,16 @@ export function evaluateTrendFromHistory(
     },
     sidewaysSignals,
     summary: buildSummary(trendLabel, { ma, macd, rsi }, sidewaysSignals, pattern, volume),
+    advice: {
+      action: adviceAction,
+      confidence: adviceConfidence,
+      targetPrice: advicePriceLevels.targetPrice,
+      stopPrice: advicePriceLevels.stopPrice,
+      holdingWindow: resolveHoldingWindow(adviceAction, adviceConfidence),
+      reasonTags: adviceReasonTags,
+      rationale: adviceCopy.rationale,
+      riskNote: adviceCopy.riskNote,
+    },
     charts: {
       candles: bars.map((bar) => ({
         date: bar.date,

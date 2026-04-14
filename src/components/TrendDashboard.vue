@@ -55,6 +55,37 @@
               analysis.analysis.indicators.capital.mainForceDirection
             }}</strong>
           </article>
+          <article class="advice-card" :class="adviceToneClass">
+            <div class="advice-head">
+              <span class="trend-label">操作建议</span>
+              <strong>{{ analysis.analysis.advice.action }}</strong>
+              <em>置信度 {{ analysis.analysis.advice.confidence }}</em>
+            </div>
+            <div class="advice-metrics">
+              <span>
+                目标价
+                {{ formatAdvicePrice(analysis.analysis.advice.targetPrice) }}
+              </span>
+              <span>
+                失效价
+                {{ formatAdvicePrice(analysis.analysis.advice.stopPrice) }}
+              </span>
+              <span>建议周期 {{ analysis.analysis.advice.holdingWindow }}</span>
+            </div>
+            <div class="advice-tags">
+              <span
+                v-for="tag in analysis.analysis.advice.reasonTags"
+                :key="tag"
+                class="advice-tag"
+              >
+                {{ tag }}
+              </span>
+            </div>
+            <p class="advice-copy">{{ analysis.analysis.advice.rationale }}</p>
+            <p class="advice-risk">
+              风险提示：{{ analysis.analysis.advice.riskNote }}
+            </p>
+          </article>
         </div>
       </section>
 
@@ -346,6 +377,20 @@ const trendToneClass = computed(() => {
   return "is-neutral";
 });
 
+const adviceToneClass = computed(() => {
+  const action = props.analysis?.analysis.advice.action;
+
+  if (action === "买入") {
+    return "tone-bullish";
+  }
+
+  if (action === "卖出") {
+    return "tone-bearish";
+  }
+
+  return "tone-neutral";
+});
+
 function signalTone(bias: string) {
   if (bias === "偏多") {
     return "tone-bullish";
@@ -363,6 +408,14 @@ function formatMoney(value: number) {
     notation: "compact",
     maximumFractionDigits: 2,
   }).format(value)} 元`;
+}
+
+function formatAdvicePrice(value: number | null) {
+  if (value == null) {
+    return "--";
+  }
+
+  return value.toFixed(3);
 }
 
 function formatMoneyCompact(value: number | null) {
@@ -983,6 +1036,59 @@ onBeforeUnmount(() => {
   font-size: 1.1rem;
 }
 
+.advice-card {
+  display: grid;
+  grid-column: span 2;
+  gap: 12px;
+  padding: 18px;
+  border-radius: 22px;
+  background: rgba(255, 255, 255, 0.04);
+}
+
+.advice-head {
+  display: grid;
+  gap: 6px;
+}
+
+.advice-head strong {
+  font-size: 1.5rem;
+}
+
+.advice-head em,
+.advice-copy,
+.advice-risk,
+.advice-metrics span {
+  color: var(--text-secondary);
+  font-style: normal;
+}
+
+.advice-copy,
+.advice-risk {
+  margin: 0;
+}
+
+.advice-metrics {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 10px;
+}
+
+.advice-tags {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+
+.advice-tag {
+  display: inline-flex;
+  align-items: center;
+  min-height: 30px;
+  padding: 0 12px;
+  border-radius: 999px;
+  background: rgba(148, 163, 184, 0.12);
+  color: var(--text-secondary);
+}
+
 .signal-grid {
   display: grid;
   grid-template-columns: repeat(3, minmax(0, 1fr));
@@ -1104,6 +1210,12 @@ onBeforeUnmount(() => {
   }
 
   .trend-summary-grid {
+    grid-template-columns: 1fr;
+  }
+
+  .advice-card,
+  .advice-metrics {
+    grid-column: span 1;
     grid-template-columns: 1fr;
   }
 }

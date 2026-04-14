@@ -432,3 +432,140 @@ test("evaluateTrendFromHistory returns a safe volume ratio when recent average v
   assert.equal(analysis.indicators.volume.volumeRatio, 1);
   assert.equal(analysis.indicators.volume.state, "平量");
 });
+
+test("evaluateTrendFromHistory returns buy advice for bullish alignment", () => {
+  const risingBars = Array.from({ length: 80 }, (_, index) => {
+    const close = 5 + index * 0.12;
+    return createBar({
+      date: `2026-01-${String((index % 28) + 1).padStart(2, "0")}`,
+      open: close - 0.05,
+      close,
+      high: close + 0.08,
+      low: close - 0.12,
+      volume: 1800 + index * 10,
+    });
+  });
+
+  const quote = createLiveQuote({
+    price: 14.7,
+    open: 14.55,
+    high: 14.82,
+    low: 14.5,
+    previousClose: 14.42,
+    changePercent: 1.94,
+    volume: 4200,
+    turnoverRatePercent: 3.25,
+    amount: 61800000,
+  });
+  const analysis = evaluateTrendFromHistory(risingBars, quote);
+
+  assert.equal(analysis.advice.action, "买入");
+  assert.match(analysis.advice.confidence, /高|中/);
+  assert.ok(analysis.advice.reasonTags.includes("多头排列"));
+  assert.ok(analysis.advice.reasonTags.includes("MACD偏多"));
+  assert.ok(analysis.advice.targetPrice >= quote.price);
+  assert.ok(analysis.advice.stopPrice < quote.price);
+  assert.match(analysis.advice.holdingWindow, /3-5个交易日|1-2周/);
+});
+
+test("evaluateTrendFromHistory returns sell advice for bearish alignment", () => {
+  const fallingBars = Array.from({ length: 80 }, (_, index) => {
+    const close = 15 - index * 0.1;
+    return createBar({
+      date: `2026-02-${String((index % 28) + 1).padStart(2, "0")}`,
+      open: close + 0.05,
+      close,
+      high: close + 0.09,
+      low: close - 0.11,
+      volume: 2200 + index * 12,
+    });
+  });
+
+  const quote = createLiveQuote({
+    price: 7.2,
+    open: 7.35,
+    high: 7.38,
+    low: 7.12,
+    previousClose: 7.48,
+    changePercent: -3.74,
+    volume: 4800,
+    turnoverRatePercent: 4.12,
+    amount: 45200000,
+  });
+  const analysis = evaluateTrendFromHistory(fallingBars, quote);
+
+  assert.equal(analysis.advice.action, "卖出");
+  assert.match(analysis.advice.confidence, /高|中/);
+  assert.ok(analysis.advice.reasonTags.includes("空头排列"));
+  assert.ok(analysis.advice.reasonTags.includes("MACD偏空"));
+  assert.ok(analysis.advice.targetPrice <= quote.price);
+  assert.ok(analysis.advice.stopPrice > quote.price);
+});
+
+test("evaluateTrendFromHistory returns watch advice when sideways signals dominate", () => {
+  const baseBars = Array.from({ length: 60 }, (_, index) => {
+    const price = 10 + (index % 4) * 0.03;
+    return createBar({
+      date: `2026-03-${String((index % 28) + 1).padStart(2, "0")}`,
+      open: price,
+      close: price + 0.01,
+      high: price + 0.08,
+      low: price - 0.08,
+      volume: 900 + (index % 3) * 15,
+    });
+  });
+
+  const analysis = evaluateTrendFromHistory(
+    baseBars,
+    createLiveQuote({
+      price: 10.08,
+      open: 10.02,
+      high: 10.11,
+      low: 9.98,
+      previousClose: 10.03,
+      changePercent: 0.5,
+      volume: 620,
+      amount: 5200000,
+    }),
+  );
+
+  assert.equal(analysis.advice.action, "观望");
+  assert.equal(analysis.advice.confidence, "低");
+  assert.equal(analysis.advice.targetPrice, null);
+  assert.equal(analysis.advice.stopPrice, null);
+});
+
+test("evaluateTrendFromHistory falls back to watch advice when target levels are invalid", () => {
+  const bars = Array.from({ length: 80 }, (_, index) => {
+    const close = 10 + index * 0.05;
+    return createBar({
+      date: `2026-04-${String((index % 28) + 1).padStart(2, "0")}`,
+      open: close - 0.02,
+      close,
+      high: close + 0.04,
+      low: close - 0.04,
+      volume: 1500 + index,
+    });
+  });
+
+  const analysis = evaluateTrendFromHistory(
+    bars,
+    createLiveQuote({
+      price: 30,
+      open: 29.8,
+      high: 30.1,
+      low: 29.7,
+      previousClose: 29.5,
+      changePercent: 1.69,
+      volume: 6000,
+      turnoverRatePercent: 2.1,
+      amount: 90000000,
+    }),
+  );
+
+  assert.equal(analysis.advice.action, "观望");
+  assert.equal(analysis.advice.confidence, "低");
+  assert.equal(analysis.advice.targetPrice, null);
+  assert.equal(analysis.advice.stopPrice, null);
+  assert.match(analysis.advice.rationale, /空间不清晰|空间不足/);
+});

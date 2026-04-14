@@ -28,5 +28,23 @@
     "displayName": "歌尔股份",
     "market": "SZ",
     "description": "搜索添加"
+  },
+  {
+    "symbol": "601388",
+    "displayName": "怡球资源",
+    "market": "SH",
+    "description": "搜索添加"
+  },
+  {
+    "symbol": "000927",
+    "displayName": "中国铁物",
+    "market": "SZ",
+    "description": "搜索添加"
+  },
+  {
+    "symbol": "600166",
+    "displayName": "福田汽车",
+    "market": "SH",
+    "description": "搜索添加"
   }
 ]
