@@ -107,9 +107,9 @@
             线、均线、MACD、BOLL、RSI 等指标计算。
           </p>
           <div class="status-row">
-            <span class="live-badge" :class="{ active: !quoteLoading }">
+            <span class="live-badge" :class="{ active: liveBadgeActive }">
               <span class="live-dot"></span>
-              {{ quoteLoading ? "连接中" : "实时轮询中" }}
+              {{ liveStatusText }}
             </span>
             <span class="update-text">
               数据时间：{{
@@ -276,6 +276,11 @@ import {
   instruments as defaultInstruments,
   type InstrumentItem,
 } from "./instruments";
+import {
+  getMarketPhase,
+  getNextMarketBoundary,
+  isTradingSession,
+} from "./market-session.js";
 import type {
   ApiResponse,
   QuoteData,
@@ -287,11 +292,19 @@ type InstrumentMutationPayload = {
   item: InstrumentItem;
 };
 
+type MarketPhase =
+  | "trading"
+  | "lunch_break"
+  | "pre_open"
+  | "closed"
+  | "weekend";
+
 const instruments = ref<InstrumentItem[]>([...defaultInstruments]);
 const activeSymbol = ref(defaultInstruments[0]?.symbol ?? "");
 const quote = ref<QuoteData | null>(null);
 const analysis = ref<TrendAnalysisPayload | null>(null);
 const theme = ref<"dark" | "light">("dark");
+const marketPhase = ref<MarketPhase>(getMarketPhase(new Date()));
 const instrumentsLoading = ref(false);
 const instrumentsError = ref("");
 const searchKeyword = ref("");
@@ -309,6 +322,7 @@ let quoteRequestId = 0;
 let analysisRequestId = 0;
 let quoteController: AbortController | null = null;
 let analysisController: AbortController | null = null;
+let marketBoundaryTimer: number | null = null;
 let quoteRefreshTimer: number | null = null;
 let analysisRefreshTimer: number | null = null;
 
@@ -321,6 +335,34 @@ const activeInstrument = computed(() => {
 });
 
 const themeClass = computed(() => `theme-${theme.value}`);
+
+const liveStatusText = computed(() => {
+  if (!activeInstrument.value) {
+    return "未选择标的";
+  }
+
+  if (marketPhase.value === "trading") {
+    return quoteLoading.value && !quote.value ? "连接中" : "实时轮询中";
+  }
+
+  if (marketPhase.value === "lunch_break") {
+    return "午间休市，已停止自动刷新";
+  }
+
+  if (marketPhase.value === "pre_open") {
+    return "未开盘，已停止自动刷新";
+  }
+
+  if (marketPhase.value === "weekend") {
+    return "休市中，已停止自动刷新";
+  }
+
+  return "已收盘，已停止自动刷新";
+});
+
+const liveBadgeActive = computed(() => {
+  return marketPhase.value === "trading" && !quoteLoading.value;
+});
 
 const priceToneClass = computed(() => {
   if (!quote.value) {
@@ -376,7 +418,34 @@ function clearAnalysisState() {
   analysisLoading.value = false;
 }
 
+function clearQuoteRefreshTimer() {
+  if (quoteRefreshTimer !== null) {
+    window.clearInterval(quoteRefreshTimer);
+    quoteRefreshTimer = null;
+  }
+}
+
+function clearAnalysisRefreshTimer() {
+  if (analysisRefreshTimer !== null) {
+    window.clearInterval(analysisRefreshTimer);
+    analysisRefreshTimer = null;
+  }
+}
+
+function clearMarketBoundaryTimer() {
+  if (marketBoundaryTimer !== null) {
+    window.clearTimeout(marketBoundaryTimer);
+    marketBoundaryTimer = null;
+  }
+}
+
+function stopPolling() {
+  clearQuoteRefreshTimer();
+  clearAnalysisRefreshTimer();
+}
+
 function clearDashboardState() {
+  stopPolling();
   cancelPendingRequests();
   clearQuoteState();
   clearAnalysisState();
@@ -545,6 +614,49 @@ async function fetchAnalysis(options: { reset?: boolean } = {}) {
   }
 }
 
+function startPolling() {
+  if (!activeSymbol.value) {
+    return;
+  }
+
+  if (quoteRefreshTimer === null) {
+    quoteRefreshTimer = window.setInterval(() => {
+      void fetchQuote();
+    }, 5000);
+  }
+
+  if (analysisRefreshTimer === null) {
+    analysisRefreshTimer = window.setInterval(() => {
+      void fetchAnalysis();
+    }, 30000);
+  }
+}
+
+function scheduleNextMarketBoundaryCheck() {
+  clearMarketBoundaryTimer();
+
+  const now = new Date();
+  const nextBoundary = getNextMarketBoundary(now);
+  const delay = Math.max(500, nextBoundary.getTime() - now.getTime() + 500);
+
+  marketBoundaryTimer = window.setTimeout(() => {
+    syncPollingByMarketPhase();
+  }, delay);
+}
+
+function syncPollingByMarketPhase() {
+  const now = new Date();
+  marketPhase.value = getMarketPhase(now) as MarketPhase;
+
+  if (isTradingSession(now) && activeSymbol.value) {
+    startPolling();
+  } else {
+    stopPolling();
+  }
+
+  scheduleNextMarketBoundaryCheck();
+}
+
 function switchInstrument(symbol: string) {
   if (symbol === activeSymbol.value) {
     return;
@@ -683,13 +795,17 @@ function formatDateTime(value: string) {
 }
 
 watch(activeSymbol, () => {
+  stopPolling();
+
   if (!activeSymbol.value) {
     clearDashboardState();
+    syncPollingByMarketPhase();
     return;
   }
 
   void fetchQuote({ reset: true });
   void fetchAnalysis({ reset: true });
+  syncPollingByMarketPhase();
 });
 
 onMounted(() => {
@@ -700,23 +816,12 @@ onMounted(() => {
     void fetchAnalysis({ reset: true });
   }
 
-  quoteRefreshTimer = window.setInterval(() => {
-    void fetchQuote();
-  }, 5000);
-  analysisRefreshTimer = window.setInterval(() => {
-    void fetchAnalysis();
-  }, 30000);
+  syncPollingByMarketPhase();
 });
 
 onBeforeUnmount(() => {
-  if (quoteRefreshTimer !== null) {
-    window.clearInterval(quoteRefreshTimer);
-  }
-
-  if (analysisRefreshTimer !== null) {
-    window.clearInterval(analysisRefreshTimer);
-  }
-
+  stopPolling();
+  clearMarketBoundaryTimer();
   cancelPendingRequests();
 });
 </script>
