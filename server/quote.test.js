@@ -2,6 +2,7 @@ import test from "node:test";
 import assert from "node:assert/strict";
 
 import {
+  getExchangeCode,
   getSecIdBySymbol,
   parseQqQuoteText,
   parseSinaQuoteText,
@@ -61,4 +62,9 @@ test("parseSinaQuoteText parses raw sina quote text", () => {
 
 test("getSecIdBySymbol maps sh etf code 513100 to sh market", () => {
   assert.equal(getSecIdBySymbol("513100"), "1.513100");
+});
+
+test("getExchangeCode maps symbols to uppercase market codes", () => {
+  assert.equal(getExchangeCode("513100"), "SH");
+  assert.equal(getExchangeCode("159980"), "SZ");
 });

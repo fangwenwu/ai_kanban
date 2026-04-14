@@ -12,6 +12,10 @@ function getExchangePrefix(symbol) {
   return getSecIdBySymbol(symbol).startsWith("1.") ? "sh" : "sz";
 }
 
+export function getExchangeCode(symbol) {
+  return getSecIdBySymbol(symbol).startsWith("1.") ? "SH" : "SZ";
+}
+
 function parseQqTimestamp(rawValue) {
   if (!/^\d{14}$/.test(rawValue)) {
     throw new Error("行情接口时间字段无效");

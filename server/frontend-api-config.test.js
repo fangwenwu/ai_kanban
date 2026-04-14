@@ -21,3 +21,13 @@ test("vite dev server should proxy /api requests to backend", async () => {
   assert.match(viteContent, /"\/api"|\'\/api\'/);
   assert.match(viteContent, /3000/);
 });
+
+test("vite dev server uses fixed port 5173 with strictPort enabled", async () => {
+  const viteContent = await readFile(
+    new URL("../vite.config.ts", import.meta.url),
+    "utf8",
+  );
+
+  assert.match(viteContent, /port\s*:\s*5173/);
+  assert.match(viteContent, /strictPort\s*:\s*true/);
+});

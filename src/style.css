@@ -27,8 +27,24 @@ button {
   font: inherit;
 }
 
+input {
+  font: inherit;
+}
+
 #app {
   min-height: 100vh;
+}
+
+.sr-only {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  padding: 0;
+  margin: -1px;
+  overflow: hidden;
+  clip: rect(0, 0, 0, 0);
+  white-space: nowrap;
+  border: 0;
 }
 
 .app-layout {
@@ -107,16 +123,76 @@ button {
   cursor: pointer;
 }
 
+.instrument-search {
+  display: grid;
+  gap: 10px;
+}
+
+.instrument-search-row {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  gap: 10px;
+}
+
+.instrument-search input {
+  height: 42px;
+  padding: 0 14px;
+  border: 1px solid var(--panel-border);
+  border-radius: 14px;
+  color: var(--text-primary);
+  background: var(--soft-surface);
+}
+
+.instrument-search input::placeholder {
+  color: var(--text-secondary);
+}
+
+.instrument-search button {
+  height: 42px;
+  border: 1px solid var(--panel-border);
+  border-radius: 14px;
+  color: var(--text-primary);
+  background: var(--soft-surface);
+  cursor: pointer;
+}
+
+.instrument-search button:disabled,
+.instrument-delete:disabled {
+  opacity: 0.7;
+  cursor: wait;
+}
+
+.search-feedback,
+.sidebar-feedback,
+.sidebar-empty {
+  margin: 0;
+  padding: 12px 14px;
+  border-radius: 16px;
+  color: var(--text-secondary);
+  background: rgba(148, 163, 184, 0.1);
+}
+
+.search-feedback,
+.sidebar-feedback.is-error {
+  color: #fde68a;
+  background: rgba(245, 158, 11, 0.14);
+}
+
 .instrument-nav {
   display: grid;
   gap: 12px;
+}
+
+.instrument-entry {
+  position: relative;
 }
 
 .instrument-item {
   display: grid;
   gap: 6px;
   width: 100%;
-  padding: 16px;
+  min-width: 0;
+  padding: 16px 52px 16px 16px;
   text-align: left;
   color: var(--text-primary);
   border: 1px solid var(--panel-border);
@@ -143,6 +219,41 @@ button {
 .instrument-item span,
 .instrument-item small {
   color: var(--text-secondary);
+}
+
+.instrument-delete {
+  position: absolute;
+  top: 12px;
+  right: 12px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 32px;
+  height: 32px;
+  padding: 0;
+  border: 1px solid transparent;
+  border-radius: 10px;
+  color: var(--text-secondary);
+  background: transparent;
+  cursor: pointer;
+  transition: color 0.2s ease, background 0.2s ease, border-color 0.2s ease;
+}
+
+.instrument-delete:hover {
+  color: #fca5a5;
+  background: rgba(239, 68, 68, 0.1);
+  border-color: rgba(239, 68, 68, 0.16);
+}
+
+.instrument-delete-icon {
+  width: 16px;
+  height: 16px;
+  stroke: currentColor;
+  stroke-width: 1.8;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+  fill: none;
+  pointer-events: none;
 }
 
 .instrument-market {
@@ -519,6 +630,10 @@ button {
 }
 
 @media (max-width: 640px) {
+  .instrument-search-row {
+    grid-template-columns: 1fr;
+  }
+
   .app-layout {
     width: min(100% - 20px, 1280px);
     padding: 20px 0 32px;

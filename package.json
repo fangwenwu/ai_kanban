@@ -5,6 +5,8 @@
   "type": "module",
   "scripts": {
     "dev": "concurrently 'npm run dev:frontend' 'npm run dev:backend'",
+    "predev:frontend": "node scripts/release-port.js 5173",
+    "predev:backend": "node scripts/release-port.js 3000",
     "dev:frontend": "vite",
     "dev:backend": "node --watch server/index.js",
     "build": "vue-tsc && vite build",
