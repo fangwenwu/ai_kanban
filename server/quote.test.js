@@ -2,6 +2,7 @@ import test from "node:test";
 import assert from "node:assert/strict";
 
 import {
+  buildVerifiedQuote,
   getExchangeCode,
   getSecIdBySymbol,
   parseQqQuoteText,
@@ -67,4 +68,147 @@ test("getSecIdBySymbol maps sh etf code 513100 to sh market", () => {
 test("getExchangeCode maps symbols to uppercase market codes", () => {
   assert.equal(getExchangeCode("513100"), "SH");
   assert.equal(getExchangeCode("159980"), "SZ");
+});
+
+test("buildVerifiedQuote marks quote fresh and verified when primary and secondary align", () => {
+  const now = "2026-04-14T01:30:10.000Z";
+  const verified = buildVerifiedQuote({
+    primaryQuote: {
+      symbol: "159980",
+      name: "有色ETF",
+      price: 2.041,
+      high: 2.047,
+      low: 2.036,
+      open: 2.038,
+      previousClose: 2.042,
+      change: -0.001,
+      changePercent: -0.05,
+      volume: 82089800,
+      amount: 167528602.6,
+      amplitudePercent: 0.54,
+      turnoverRatePercent: 2.31,
+      updatedAt: "2026-04-14T01:30:00.000Z",
+    },
+    secondaryQuote: {
+      symbol: "159980",
+      name: "有色ETF",
+      price: 2.041,
+      high: 2.047,
+      low: 2.036,
+      open: 2.038,
+      previousClose: 2.042,
+      change: -0.001,
+      changePercent: -0.05,
+      volume: 82100000,
+      amount: 167528602.6,
+      amplitudePercent: 0.54,
+      turnoverRatePercent: null,
+      updatedAt: "2026-04-14T01:30:05.000Z",
+    },
+    now,
+  });
+
+  assert.equal(verified.quality.freshness.status, "fresh");
+  assert.equal(verified.quality.authenticity.status, "verified");
+  assert.equal(verified.quality.consistency.status, "pass");
+  assert.equal(verified.quality.degraded, false);
+  assert.equal(verified.verifiedAgainst, "sina");
+});
+
+test("buildVerifiedQuote downgrades when secondary quote is missing", () => {
+  const partial = buildVerifiedQuote({
+    primaryQuote: {
+      symbol: "159980",
+      name: "有色ETF",
+      price: 2.041,
+      high: 2.047,
+      low: 2.036,
+      open: 2.038,
+      previousClose: 2.042,
+      change: -0.001,
+      changePercent: -0.05,
+      volume: 82089800,
+      amount: 167528602.6,
+      amplitudePercent: 0.54,
+      turnoverRatePercent: 2.31,
+      updatedAt: "2026-04-14T01:30:00.000Z",
+    },
+    secondaryQuote: null,
+    now: "2026-04-14T01:30:10.000Z",
+  });
+
+  assert.equal(partial.quality.authenticity.status, "partial");
+  assert.equal(partial.quality.degraded, true);
+  assert.equal(partial.quality.authenticity.fallbackUsed, true);
+  assert.match(partial.quality.warnings.join(","), /备用源缺失/);
+});
+
+test("buildVerifiedQuote marks mismatch as invalid when price exceeds tolerance", () => {
+  const invalid = buildVerifiedQuote({
+    primaryQuote: {
+      symbol: "159980",
+      name: "有色ETF",
+      price: 2.041,
+      high: 2.047,
+      low: 2.036,
+      open: 2.038,
+      previousClose: 2.042,
+      change: -0.001,
+      changePercent: -0.05,
+      volume: 82089800,
+      amount: 167528602.6,
+      amplitudePercent: 0.54,
+      turnoverRatePercent: 2.31,
+      updatedAt: "2026-04-14T01:30:00.000Z",
+    },
+    secondaryQuote: {
+      symbol: "159980",
+      name: "有色ETF",
+      price: 2.08,
+      high: 2.047,
+      low: 2.036,
+      open: 2.038,
+      previousClose: 2.042,
+      change: 0.039,
+      changePercent: 1.91,
+      volume: 82089800,
+      amount: 167528602.6,
+      amplitudePercent: 0.54,
+      turnoverRatePercent: null,
+      updatedAt: "2026-04-14T01:30:05.000Z",
+    },
+    now: "2026-04-14T01:30:10.000Z",
+  });
+
+  assert.equal(invalid.quality.authenticity.status, "invalid");
+  assert.equal(invalid.quality.consistency.status, "fail");
+  assert.equal(invalid.quality.degraded, true);
+  assert.equal(invalid.quality.consistency.mismatches[0].field, "price");
+});
+
+test("buildVerifiedQuote marks quote stale when updatedAt is older than 15 seconds", () => {
+  const stale = buildVerifiedQuote({
+    primaryQuote: {
+      symbol: "159980",
+      name: "有色ETF",
+      price: 2.041,
+      high: 2.047,
+      low: 2.036,
+      open: 2.038,
+      previousClose: 2.042,
+      change: -0.001,
+      changePercent: -0.05,
+      volume: 82089800,
+      amount: 167528602.6,
+      amplitudePercent: 0.54,
+      turnoverRatePercent: 2.31,
+      updatedAt: "2026-04-14T01:29:30.000Z",
+    },
+    secondaryQuote: null,
+    now: "2026-04-14T01:30:10.000Z",
+  });
+
+  assert.equal(stale.quality.freshness.status, "stale");
+  assert.equal(stale.quality.freshness.ageSeconds, 40);
+  assert.equal(stale.quality.degraded, true);
 });

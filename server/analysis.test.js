@@ -38,6 +38,34 @@ function createLiveQuote(overrides = {}) {
   };
 }
 
+function createQuoteQuality(overrides = {}) {
+  return {
+    freshness: {
+      status: "fresh",
+      maxAgeSeconds: 15,
+      ageSeconds: 2,
+    },
+    authenticity: {
+      status: "verified",
+      primarySource: "qq",
+      secondarySource: "sina",
+      fallbackUsed: false,
+    },
+    completeness: {
+      status: "complete",
+      missingFields: [],
+    },
+    consistency: {
+      status: "pass",
+      mismatches: [],
+    },
+    score: 100,
+    degraded: false,
+    warnings: [],
+    ...overrides,
+  };
+}
+
 test("parseTencentHistoryPayload extracts qfq daily bars", () => {
   const bars = parseTencentHistoryPayload(
     {
@@ -568,4 +596,128 @@ test("evaluateTrendFromHistory falls back to watch advice when target levels are
   assert.equal(analysis.advice.targetPrice, null);
   assert.equal(analysis.advice.stopPrice, null);
   assert.match(analysis.advice.rationale, /空间不清晰|空间不足/);
+});
+
+test("evaluateTrendFromHistory downgrades to low confidence when quote quality is stale", () => {
+  const risingBars = Array.from({ length: 80 }, (_, index) => {
+    const close = 5 + index * 0.12;
+    return createBar({
+      date: `2026-05-${String((index % 28) + 1).padStart(2, "0")}`,
+      open: close - 0.05,
+      close,
+      high: close + 0.08,
+      low: close - 0.12,
+      volume: 1800 + index * 10,
+    });
+  });
+
+  const analysis = evaluateTrendFromHistory(
+    risingBars,
+    createLiveQuote({
+      price: 14.7,
+      changePercent: 1.94,
+      updatedAt: "2026-04-14T01:29:30.000Z",
+      quality: createQuoteQuality({
+        freshness: { status: "stale", maxAgeSeconds: 15, ageSeconds: 40 },
+        score: 75,
+        degraded: true,
+        warnings: ["实时行情已超过15秒未更新"],
+      }),
+    }),
+    [],
+    {
+      symbol: "159980",
+      name: "有色ETF",
+      mainNetInflow: 8000000,
+      updatedAt: "2026-04-14T01:30:05.000Z",
+    },
+  );
+
+  assert.equal(analysis.dataQuality.status, "degraded");
+  assert.equal(analysis.advice.confidence, "低");
+  assert.match(analysis.advice.confidenceReason, /超过15秒未更新/);
+});
+
+test("evaluateTrendFromHistory blocks strong recommendation when quote authenticity is invalid", () => {
+  const risingBars = Array.from({ length: 80 }, (_, index) => {
+    const close = 5 + index * 0.12;
+    return createBar({
+      date: `2026-06-${String((index % 28) + 1).padStart(2, "0")}`,
+      open: close - 0.05,
+      close,
+      high: close + 0.08,
+      low: close - 0.12,
+      volume: 1800 + index * 10,
+    });
+  });
+
+  const analysis = evaluateTrendFromHistory(
+    risingBars,
+    createLiveQuote({
+      price: 14.7,
+      changePercent: 1.94,
+      quality: createQuoteQuality({
+        authenticity: {
+          status: "invalid",
+          primarySource: "qq",
+          secondarySource: "sina",
+          fallbackUsed: false,
+        },
+        consistency: {
+          status: "fail",
+          mismatches: [{ field: "price", primary: 14.7, secondary: 15.3, tolerance: "0.3%" }],
+        },
+        score: 45,
+        degraded: true,
+        warnings: ["主备行情关键字段存在超阈值偏差"],
+      }),
+    }),
+  );
+
+  assert.equal(analysis.dataQuality.status, "blocked");
+  assert.equal(analysis.advice.action, "观望");
+  assert.equal(analysis.advice.confidence, "低");
+  assert.match(analysis.dataQuality.blockingReasons.join(","), /真实性/);
+});
+
+test("evaluateTrendFromHistory separates estimated capital from real capital", () => {
+  const risingBars = Array.from({ length: 80 }, (_, index) => {
+    const close = 5 + index * 0.12;
+    return createBar({
+      date: `2026-07-${String((index % 28) + 1).padStart(2, "0")}`,
+      open: close - 0.05,
+      close,
+      high: close + 0.08,
+      low: close - 0.12,
+      volume: 1800 + index * 10,
+    });
+  });
+
+  const analysis = evaluateTrendFromHistory(
+    risingBars,
+    createLiveQuote({
+      price: 14.7,
+      changePercent: 1.94,
+      amount: 61800000,
+      quality: createQuoteQuality({
+        authenticity: {
+          status: "partial",
+          primarySource: "qq",
+          secondarySource: null,
+          fallbackUsed: true,
+        },
+        consistency: {
+          status: "warn",
+          mismatches: [],
+        },
+        score: 82,
+        degraded: true,
+        warnings: ["备用行情源缺失，当前仅能部分验证真实性"],
+      }),
+    }),
+  );
+
+  assert.equal(analysis.indicators.capital.mainForceNetAmountReal, null);
+  assert.equal(analysis.indicators.capital.mainForceSourceType, "estimated");
+  assert.notEqual(analysis.indicators.capital.mainForceNetAmountEstimated, null);
 });

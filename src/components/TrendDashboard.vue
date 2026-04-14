@@ -29,6 +29,43 @@
     <template v-else-if="analysis">
       <section class="trend-hero">
         <div class="trend-result" :class="trendToneClass">
+          <div class="quality-strip">
+            <span class="quality-badge" :class="qualityGateClass">
+              {{ qualityGateLabel }}
+            </span>
+            <span
+              class="quality-badge"
+              :class="
+                quoteQuality?.freshness.status === 'fresh'
+                  ? 'quality-pass'
+                  : 'quality-degraded'
+              "
+            >
+              {{
+                quoteQuality?.freshness.status === "fresh"
+                  ? "15秒内实时"
+                  : "已超过15秒"
+              }}
+            </span>
+            <span
+              class="quality-badge"
+              :class="
+                quoteQuality?.authenticity.status === 'verified'
+                  ? 'quality-pass'
+                  : quoteQuality?.authenticity.status === 'invalid'
+                    ? 'quality-blocked'
+                    : 'quality-degraded'
+              "
+            >
+              {{
+                quoteQuality?.authenticity.status === "verified"
+                  ? "双源已验证"
+                  : quoteQuality?.authenticity.status === "invalid"
+                    ? "校验冲突"
+                    : "部分验证"
+              }}
+            </span>
+          </div>
           <span class="trend-label">趋势结论</span>
           <strong>{{ analysis.analysis.trendLabel }}</strong>
           <p>{{ analysis.analysis.summary }}</p>
@@ -81,7 +118,28 @@
                 {{ tag }}
               </span>
             </div>
+            <div v-if="advice.degradeReasons?.length" class="advice-alert">
+              <strong>降级原因</strong>
+              <p>{{ advice.degradeReasons.join("；") }}</p>
+            </div>
+            <div
+              v-if="analysis.analysis.evidence.scoreBreakdown.length"
+              class="evidence-panel"
+            >
+              <span
+                v-for="item in visibleEvidence"
+                :key="item.key"
+                class="evidence-chip"
+              >
+                {{ item.reason }}
+              </span>
+            </div>
             <p class="advice-copy">{{ advice.rationale ?? "--" }}</p>
+            <p class="advice-risk">
+              置信依据：{{
+                advice.confidenceReason ?? "数据质量与信号一致性正常"
+              }}
+            </p>
             <p class="advice-risk">风险提示：{{ advice.riskNote ?? "--" }}</p>
           </article>
         </div>
@@ -179,12 +237,9 @@
           <strong>{{ analysis.analysis.indicators.pattern.pattern }}</strong>
           <p>{{ analysis.analysis.indicators.capital.mainForceDirection }}</p>
           <small>
-            {{
-              formatMoney(
-                analysis.analysis.indicators.capital.mainForceNetAmount,
-              )
-            }}
+            {{ capitalAmountLabel }}
           </small>
+          <small>{{ capitalSourceLabel }}</small>
         </article>
       </section>
 
@@ -279,7 +334,10 @@ import { init, use } from "echarts/core";
 import { CanvasRenderer } from "echarts/renderers";
 import type { EChartsOption } from "echarts";
 import type { EChartsType } from "echarts/core";
-import type { TrendAnalysisPayload } from "../market-types";
+import type {
+  EvidenceBreakdownItem,
+  TrendAnalysisPayload,
+} from "../market-types";
 
 use([
   BarChart,
@@ -377,6 +435,16 @@ const trendToneClass = computed(() => {
 });
 
 const advice = computed<Advice>(() => props.analysis?.analysis.advice ?? {});
+const quoteQuality = computed(() => props.analysis?.quote.quality ?? null);
+const qualityGate = computed(
+  () => props.analysis?.analysis.dataQuality ?? null,
+);
+const visibleEvidence = computed<EvidenceBreakdownItem[]>(
+  () =>
+    props.analysis?.analysis.evidence.scoreBreakdown.filter(
+      (item: EvidenceBreakdownItem) => item.score !== 0,
+    ) ?? [],
+);
 
 const adviceToneClass = computed(() => {
   const action = advice.value.action;
@@ -390,6 +458,71 @@ const adviceToneClass = computed(() => {
   }
 
   return "tone-neutral";
+});
+
+const qualityGateLabel = computed(() => {
+  const status = qualityGate.value?.status;
+
+  if (status === "pass") {
+    return "实时可信";
+  }
+
+  if (status === "blocked") {
+    return "数据阻断";
+  }
+
+  return "已降级";
+});
+
+const qualityGateClass = computed(() => {
+  const status = qualityGate.value?.status;
+
+  if (status === "pass") {
+    return "quality-pass";
+  }
+
+  if (status === "blocked") {
+    return "quality-blocked";
+  }
+
+  return "quality-degraded";
+});
+
+const capitalSourceLabel = computed(() => {
+  const sourceType =
+    props.analysis?.analysis.indicators.capital.mainForceSourceType;
+
+  if (sourceType === "verified") {
+    return "实时资金已验证";
+  }
+
+  if (sourceType === "history_only") {
+    return "仅历史资金辅助";
+  }
+
+  if (sourceType === "estimated") {
+    return "资金为估算";
+  }
+
+  return "资金缺失";
+});
+
+const capitalAmountLabel = computed(() => {
+  const capital = props.analysis?.analysis.indicators.capital;
+
+  if (!capital) {
+    return "--";
+  }
+
+  if (capital.mainForceNetAmountReal != null) {
+    return `${formatMoney(capital.mainForceNetAmountReal)}（实时）`;
+  }
+
+  if (capital.mainForceNetAmountEstimated != null) {
+    return `${formatMoney(capital.mainForceNetAmountEstimated)}（估算）`;
+  }
+
+  return "--";
 });
 
 function signalTone(bias: string) {
@@ -996,6 +1129,13 @@ onBeforeUnmount(() => {
   background: rgba(255, 255, 255, 0.04);
 }
 
+.quality-strip {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  margin-bottom: 12px;
+}
+
 .trend-label {
   display: inline-flex;
   margin-bottom: 12px;
@@ -1088,6 +1228,51 @@ onBeforeUnmount(() => {
   border-radius: 999px;
   background: rgba(148, 163, 184, 0.12);
   color: var(--text-secondary);
+}
+
+.quality-badge,
+.evidence-chip {
+  display: inline-flex;
+  align-items: center;
+  min-height: 30px;
+  padding: 0 12px;
+  border-radius: 999px;
+  background: rgba(148, 163, 184, 0.12);
+  color: var(--text-secondary);
+}
+
+.quality-pass {
+  background: rgba(34, 197, 94, 0.14);
+  color: #22c55e;
+}
+
+.quality-degraded {
+  background: rgba(245, 158, 11, 0.16);
+  color: #f59e0b;
+}
+
+.quality-blocked {
+  background: rgba(239, 68, 68, 0.16);
+  color: #ef4444;
+}
+
+.advice-alert {
+  display: grid;
+  gap: 8px;
+  padding: 14px 16px;
+  border-radius: 16px;
+  background: rgba(245, 158, 11, 0.12);
+}
+
+.advice-alert p {
+  margin: 0;
+  color: var(--text-secondary);
+}
+
+.evidence-panel {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
 }
 
 .signal-grid {

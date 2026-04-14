@@ -637,6 +637,197 @@ function buildAdviceCopy({
   };
 }
 
+function getDefaultQuoteQuality() {
+  return {
+    freshness: {
+      status: "fresh",
+      maxAgeSeconds: 15,
+      ageSeconds: 0,
+    },
+    authenticity: {
+      status: "verified",
+      primarySource: "internal",
+      secondarySource: null,
+      fallbackUsed: false,
+    },
+    completeness: {
+      status: "complete",
+      missingFields: [],
+    },
+    consistency: {
+      status: "pass",
+      mismatches: [],
+    },
+    score: 100,
+    degraded: false,
+    warnings: [],
+  };
+}
+
+function evaluateAnalysisQuality(liveQuote, capitalSnapshot, capitalFlowRows) {
+  if (!liveQuote.quality) {
+    return {
+      status: "pass",
+      score: 100,
+      degraded: false,
+      blockingReasons: [],
+      warnings: [],
+    };
+  }
+
+  const quoteQuality = liveQuote.quality;
+  const blockingReasons = [];
+  const warnings = [...(quoteQuality.warnings ?? [])];
+  let score = quoteQuality.score ?? 0;
+
+  if (quoteQuality.authenticity?.status === "invalid") {
+    blockingReasons.push("实时行情真实性未通过校验");
+  }
+
+  if (quoteQuality.freshness?.status === "stale") {
+    warnings.push("推荐已因行情过期降级");
+  }
+
+  if (!capitalSnapshot) {
+    if (capitalFlowRows.length) {
+      score -= 8;
+      warnings.push("实时主力资金缺失，当前仅使用历史资金辅助判断");
+    } else {
+      score -= 20;
+      warnings.push("实时主力资金缺失，当前仅使用估算资金辅助判断");
+    }
+  }
+
+  const status = blockingReasons.length
+    ? "blocked"
+    : score < 85 || quoteQuality.degraded
+      ? "degraded"
+      : "pass";
+
+  return {
+    status,
+    score: Math.max(0, score),
+    degraded: status !== "pass",
+    blockingReasons,
+    warnings: [...new Set(warnings)],
+  };
+}
+
+function buildEvidenceBreakdown({
+  ma,
+  macd,
+  rsi,
+  boll,
+  volume,
+  pattern,
+  sidewaysSignals,
+  capitalSourceType,
+  mainForceNetAmount,
+  quoteQuality,
+}) {
+  const scoreBreakdown = [
+    {
+      key: "ma",
+      group: "core",
+      direction: ma.bias === "偏多" ? "bullish" : ma.bias === "偏空" ? "bearish" : "neutral",
+      weight: 20,
+      score: ma.bias === "偏多" ? 20 : ma.bias === "偏空" ? -20 : 0,
+      reason: ma.detail,
+    },
+    {
+      key: "macd",
+      group: "core",
+      direction: macd.bias === "偏多" ? "bullish" : macd.bias === "偏空" ? "bearish" : "neutral",
+      weight: 20,
+      score: macd.bias === "偏多" ? 20 : macd.bias === "偏空" ? -20 : 0,
+      reason: `${macd.state}/${macd.zeroAxis}`,
+    },
+    {
+      key: "rsi",
+      group: "core",
+      direction: rsi.bias === "偏多" ? "bullish" : rsi.bias === "偏空" ? "bearish" : "neutral",
+      weight: 15,
+      score: rsi.bias === "偏多" ? 15 : rsi.bias === "偏空" ? -15 : 0,
+      reason: `RSI${rsi.state}`,
+    },
+    {
+      key: "volume",
+      group: "realtime",
+      direction: volume.relation === "价涨量增"
+        ? "bullish"
+        : volume.relation === "价跌量增"
+          ? "bearish"
+          : "neutral",
+      weight: 15,
+      score: volume.relation === "价涨量增"
+        ? 15
+        : volume.relation === "价跌量增"
+          ? -15
+          : 0,
+      reason: volume.relation,
+    },
+    {
+      key: "pattern",
+      group: "core",
+      direction: pattern.pattern === "突破"
+        ? "bullish"
+        : pattern.pattern === "破位"
+          ? "bearish"
+          : sidewaysSignals.length >= 3
+            ? "sideways"
+            : "neutral",
+      weight: 10,
+      score: pattern.pattern === "突破" ? 10 : pattern.pattern === "破位" ? -10 : 0,
+      reason: `${pattern.pattern}/${pattern.candleType}`,
+    },
+    {
+      key: "boll",
+      group: "auxiliary",
+      direction: boll.position.includes("上")
+        ? "bullish"
+        : boll.position.includes("下")
+          ? "bearish"
+          : "neutral",
+      weight: 10,
+      score: boll.position.includes("上") ? 10 : boll.position.includes("下") ? -10 : 0,
+      reason: `${boll.state}/${boll.position}`,
+    },
+    {
+      key: "capital",
+      group: "realtime",
+      direction: mainForceNetAmount >= 0 ? "bullish" : "bearish",
+      weight: 10,
+      score: capitalSourceType === "missing"
+        ? 0
+        : capitalSourceType === "verified"
+          ? (mainForceNetAmount >= 0 ? 10 : -10)
+          : capitalSourceType === "history_only"
+            ? (mainForceNetAmount >= 0 ? 4 : -4)
+            : (mainForceNetAmount >= 0 ? 2 : -2),
+      reason: capitalSourceType === "verified"
+        ? (mainForceNetAmount >= 0 ? "实时资金净流入" : "实时资金净流出")
+        : capitalSourceType === "history_only"
+          ? "仅历史资金辅助"
+          : capitalSourceType === "estimated"
+            ? "估算资金辅助"
+            : "资金缺失",
+    },
+  ];
+
+  return {
+    passedChecks: [
+      quoteQuality.freshness?.status === "fresh" ? "freshness" : null,
+      quoteQuality.authenticity?.status === "verified" ? "authenticity" : null,
+      quoteQuality.consistency?.status === "pass" ? "consistency" : null,
+    ].filter(Boolean),
+    failedChecks: [
+      ...(quoteQuality.warnings ?? []),
+      ...((quoteQuality.consistency?.mismatches ?? []).map((item) => `mismatch:${item.field}`)),
+    ],
+    scoreBreakdown,
+  };
+}
+
 export function parseTencentHistoryPayload(payload, symbol) {
   const exchangePrefix = getSecIdBySymbol(symbol).startsWith("1.") ? "sh" : "sz";
   const rows = payload?.data?.[`${exchangePrefix}${symbol}`]?.qfqday
@@ -747,6 +938,9 @@ export function evaluateTrendFromHistory(
     throw new Error("历史K线数量不足，无法分析趋势");
   }
 
+  const quoteQuality = liveQuote.quality ?? getDefaultQuoteQuality();
+  const analysisQuality = evaluateAnalysisQuality(liveQuote, capitalSnapshot, capitalFlowRows);
+
   const closes = bars.map((bar) => bar.close);
   const ma5Series = movingAverageSeries(closes, 5);
   const ma10Series = movingAverageSeries(closes, 10);
@@ -791,6 +985,13 @@ export function evaluateTrendFromHistory(
   const mainForceNetAmount = capitalSnapshot?.mainNetInflow == null
     ? round(capitalFlowEstimate, 0)
     : round(capitalSnapshot.mainNetInflow, 0);
+  const capitalSourceType = capitalSnapshot?.mainNetInflow != null
+    ? "verified"
+    : capitalFlowRows.length
+      ? "history_only"
+      : Number.isFinite(capitalFlowEstimate)
+        ? "estimated"
+        : "missing";
   const mainForceDirection = mainForceNetAmount >= 0
     ? capitalSnapshot ? "净流入" : "净流入估算"
     : capitalSnapshot ? "净流出" : "净流出估算";
@@ -831,25 +1032,47 @@ export function evaluateTrendFromHistory(
     boll: boll.value,
   });
   const adviceAction =
-    adviceBase.action !== "观望" && priceLevels == null
+    analysisQuality.status === "blocked"
+      ? "观望"
+      : adviceBase.action !== "观望" && priceLevels == null
       ? "观望"
       : adviceBase.action;
   const downgradedForInvalidLevels =
     adviceBase.action !== "观望" && priceLevels == null;
-  const adviceConfidence =
-    adviceAction === "观望" ? "低" : adviceBase.confidence;
+  const adviceConfidence = analysisQuality.status === "pass"
+    ? (adviceAction === "观望" ? "低" : adviceBase.confidence)
+    : "低";
   const advicePriceLevels = adviceAction === "观望"
     ? { targetPrice: null, stopPrice: null }
     : priceLevels;
+  const evidence = buildEvidenceBreakdown({
+    ma,
+    macd,
+    rsi,
+    boll,
+    volume,
+    pattern,
+    sidewaysSignals,
+    capitalSourceType,
+    mainForceNetAmount,
+    quoteQuality,
+  });
   const adviceCopy = buildAdviceCopy({
     action: adviceAction,
     confidence: adviceConfidence,
     reasonTags: adviceReasonTags,
     downgradedForInvalidLevels,
   });
+  const confidenceReason = analysisQuality.status === "blocked"
+    ? analysisQuality.blockingReasons.join("；")
+    : analysisQuality.status === "degraded"
+      ? analysisQuality.warnings.join("；")
+      : "关键实时数据校验通过，趋势与确认因子同向";
 
   return {
     trendLabel,
+    dataQuality: analysisQuality,
+    evidence,
     indicators: {
       ma,
       macd,
@@ -865,6 +1088,11 @@ export function evaluateTrendFromHistory(
         turnoverRatePercent,
         mainForceNetAmount,
         mainForceDirection,
+        mainForceNetAmountReal: capitalSnapshot?.mainNetInflow ?? null,
+        mainForceNetAmountEstimated: capitalSnapshot?.mainNetInflow == null
+          ? round(capitalFlowEstimate, 0)
+          : null,
+        mainForceSourceType: capitalSourceType,
       },
     },
     sidewaysSignals,
@@ -872,6 +1100,13 @@ export function evaluateTrendFromHistory(
     advice: {
       action: adviceAction,
       confidence: adviceConfidence,
+      qualityGate: analysisQuality.status,
+      confidenceReason,
+      degradeReasons: analysisQuality.status === "pass" ? [] : analysisQuality.warnings,
+      evidenceSummary: evidence.scoreBreakdown
+        .filter((item) => item.score !== 0)
+        .slice(0, 4)
+        .map((item) => item.reason),
       targetPrice: advicePriceLevels.targetPrice,
       stopPrice: advicePriceLevels.stopPrice,
       holdingWindow: resolveHoldingWindow(adviceAction, adviceConfidence),

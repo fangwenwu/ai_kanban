@@ -1,4 +1,11 @@
 const GBK_DECODER = new TextDecoder("gbk");
+const QUOTE_MAX_AGE_SECONDS = 15;
+const QUOTE_TOLERANCES = {
+  pricePercent: 0.003,
+  changePercentAbs: 0.2,
+  volumePercent: 0.08,
+  updatedAtMs: 15 * 1000,
+};
 
 function fromPriceUnit(value) {
   return Number((Number(value) / 1000).toFixed(3));
@@ -92,6 +99,10 @@ function buildQqQuoteUrl(symbol) {
   return `https://qt.gtimg.cn/q=${getExchangePrefix(symbol)}${symbol}`;
 }
 
+function buildSinaQuoteUrl(symbol) {
+  return `https://hq.sinajs.cn/list=${getExchangePrefix(symbol)}${symbol}`;
+}
+
 async function requestQqQuoteText(symbol) {
   const response = await fetch(buildQqQuoteUrl(symbol), {
     headers: {
@@ -106,6 +117,163 @@ async function requestQqQuoteText(symbol) {
   }
 
   return GBK_DECODER.decode(await response.arrayBuffer());
+}
+
+async function requestSinaQuoteText(symbol) {
+  const response = await fetch(buildSinaQuoteUrl(symbol), {
+    headers: {
+      Referer: "https://finance.sina.com.cn/",
+      "User-Agent": "Mozilla/5.0",
+    },
+    signal: AbortSignal.timeout(8000),
+  });
+
+  if (!response.ok) {
+    throw new Error(`备用行情接口请求失败: ${response.status}`);
+  }
+
+  return GBK_DECODER.decode(await response.arrayBuffer());
+}
+
+function toAgeSeconds(updatedAt, now) {
+  const updatedAtMs = Date.parse(updatedAt);
+  const nowMs = Date.parse(now);
+
+  if (Number.isNaN(updatedAtMs) || Number.isNaN(nowMs)) {
+    return null;
+  }
+
+  return Math.max(0, Math.round((nowMs - updatedAtMs) / 1000));
+}
+
+function compareQuotes(primaryQuote, secondaryQuote) {
+  if (!secondaryQuote) {
+    return {
+      status: "warn",
+      mismatches: [],
+      warnings: ["备用源缺失，当前仅能部分验证真实性"],
+    };
+  }
+
+  const mismatches = [];
+  const priceDiffRatio = primaryQuote.price === 0
+    ? 0
+    : Math.abs(primaryQuote.price - secondaryQuote.price) / primaryQuote.price;
+
+  if (priceDiffRatio > QUOTE_TOLERANCES.pricePercent) {
+    mismatches.push({
+      field: "price",
+      primary: primaryQuote.price,
+      secondary: secondaryQuote.price,
+      tolerance: "0.3%",
+    });
+  }
+
+  if (
+    Math.abs(primaryQuote.changePercent - secondaryQuote.changePercent)
+      > QUOTE_TOLERANCES.changePercentAbs
+  ) {
+    mismatches.push({
+      field: "changePercent",
+      primary: primaryQuote.changePercent,
+      secondary: secondaryQuote.changePercent,
+      tolerance: 0.2,
+    });
+  }
+
+  const volumeDiffRatio = primaryQuote.volume === 0
+    ? 0
+    : Math.abs(primaryQuote.volume - secondaryQuote.volume) / primaryQuote.volume;
+
+  if (volumeDiffRatio > QUOTE_TOLERANCES.volumePercent) {
+    mismatches.push({
+      field: "volume",
+      primary: primaryQuote.volume,
+      secondary: secondaryQuote.volume,
+      tolerance: "8%",
+    });
+  }
+
+  const primaryUpdatedAtMs = Date.parse(primaryQuote.updatedAt);
+  const secondaryUpdatedAtMs = Date.parse(secondaryQuote.updatedAt);
+  if (
+    !Number.isNaN(primaryUpdatedAtMs)
+    && !Number.isNaN(secondaryUpdatedAtMs)
+    && Math.abs(primaryUpdatedAtMs - secondaryUpdatedAtMs) > QUOTE_TOLERANCES.updatedAtMs
+  ) {
+    mismatches.push({
+      field: "updatedAt",
+      primary: primaryQuote.updatedAt,
+      secondary: secondaryQuote.updatedAt,
+      tolerance: "15s",
+    });
+  }
+
+  return {
+    status: mismatches.length ? "fail" : "pass",
+    mismatches,
+    warnings: mismatches.length ? ["主备行情关键字段存在超阈值偏差"] : [],
+  };
+}
+
+export function buildVerifiedQuote({
+  primaryQuote,
+  secondaryQuote,
+  now = new Date().toISOString(),
+}) {
+  const ageSeconds = toAgeSeconds(primaryQuote.updatedAt, now);
+  const freshnessStatus = ageSeconds == null || ageSeconds > QUOTE_MAX_AGE_SECONDS
+    ? "stale"
+    : "fresh";
+  const consistency = compareQuotes(primaryQuote, secondaryQuote);
+  const authenticityStatus = consistency.status === "fail"
+    ? "invalid"
+    : secondaryQuote
+      ? "verified"
+      : "partial";
+  const warnings = [];
+
+  if (freshnessStatus === "stale") {
+    warnings.push("实时行情已超过15秒未更新");
+  }
+  warnings.push(...consistency.warnings);
+
+  return {
+    ...primaryQuote,
+    source: "qq",
+    verifiedAgainst: secondaryQuote ? "sina" : null,
+    serverTime: now,
+    quality: {
+      freshness: {
+        status: freshnessStatus,
+        maxAgeSeconds: QUOTE_MAX_AGE_SECONDS,
+        ageSeconds,
+      },
+      authenticity: {
+        status: authenticityStatus,
+        primarySource: "qq",
+        secondarySource: secondaryQuote ? "sina" : null,
+        fallbackUsed: !secondaryQuote,
+      },
+      completeness: {
+        status: "complete",
+        missingFields: [],
+      },
+      consistency: {
+        status: consistency.status,
+        mismatches: consistency.mismatches,
+      },
+      score: Math.max(
+        0,
+        100
+          - (freshnessStatus === "stale" ? 25 : 0)
+          - (!secondaryQuote ? 10 : 0)
+          - (consistency.status === "fail" ? 30 : 0),
+      ),
+      degraded: freshnessStatus === "stale" || authenticityStatus !== "verified",
+      warnings,
+    },
+  };
 }
 
 export function parseSinaQuoteText(rawText) {
@@ -163,6 +331,24 @@ export function parseSinaQuoteText(rawText) {
 }
 
 export async function fetchQuoteBySymbol(symbol) {
-  const payload = await requestQqQuoteText(symbol);
-  return parseQqQuoteText(payload);
+  const now = new Date().toISOString();
+  const [primaryResult, secondaryResult] = await Promise.allSettled([
+    requestQqQuoteText(symbol),
+    requestSinaQuoteText(symbol),
+  ]);
+
+  if (primaryResult.status !== "fulfilled") {
+    throw primaryResult.reason;
+  }
+
+  const primaryQuote = parseQqQuoteText(primaryResult.value);
+  const secondaryQuote = secondaryResult.status === "fulfilled"
+    ? parseSinaQuoteText(secondaryResult.value)
+    : null;
+
+  return buildVerifiedQuote({
+    primaryQuote,
+    secondaryQuote,
+    now,
+  });
 }
