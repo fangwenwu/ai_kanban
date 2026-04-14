@@ -529,7 +529,11 @@ function pickClosestLevel(levels, predicate, compare) {
     return null;
   }
 
-  return filtered.sort(compare)[0];
+  return filtered.sort((left, right) => {
+    const result = compare(left, right);
+
+    return Number.isFinite(result) ? result : 0;
+  })[0];
 }
 
 function resolveAdvicePriceLevels({ action, liveQuote, bars, ma20, boll }) {
@@ -537,6 +541,10 @@ function resolveAdvicePriceLevels({ action, liveQuote, bars, ma20, boll }) {
   const highest20 = Math.max(...recentBars.map((bar) => bar.high));
   const lowest20 = Math.min(...recentBars.map((bar) => bar.low));
   const currentPrice = liveQuote.price;
+
+  if (!Number.isFinite(currentPrice) || currentPrice <= 0) {
+    return null;
+  }
 
   if (action === "买入") {
     const targetPrice = pickClosestLevel(

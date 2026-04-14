@@ -58,33 +58,31 @@
           <article class="advice-card" :class="adviceToneClass">
             <div class="advice-head">
               <span class="trend-label">操作建议</span>
-              <strong>{{ analysis.analysis.advice.action }}</strong>
-              <em>置信度 {{ analysis.analysis.advice.confidence }}</em>
+              <strong>{{ advice.action ?? "--" }}</strong>
+              <em>置信度 {{ advice.confidence ?? "--" }}</em>
             </div>
             <div class="advice-metrics">
               <span>
                 目标价
-                {{ formatAdvicePrice(analysis.analysis.advice.targetPrice) }}
+                {{ formatAdvicePrice(advice.targetPrice) }}
               </span>
               <span>
                 失效价
-                {{ formatAdvicePrice(analysis.analysis.advice.stopPrice) }}
+                {{ formatAdvicePrice(advice.stopPrice) }}
               </span>
-              <span>建议周期 {{ analysis.analysis.advice.holdingWindow }}</span>
+              <span>建议周期 {{ advice.holdingWindow ?? "--" }}</span>
             </div>
             <div class="advice-tags">
               <span
-                v-for="tag in analysis.analysis.advice.reasonTags"
+                v-for="tag in advice.reasonTags ?? []"
                 :key="tag"
                 class="advice-tag"
               >
                 {{ tag }}
               </span>
             </div>
-            <p class="advice-copy">{{ analysis.analysis.advice.rationale }}</p>
-            <p class="advice-risk">
-              风险提示：{{ analysis.analysis.advice.riskNote }}
-            </p>
+            <p class="advice-copy">{{ advice.rationale ?? "--" }}</p>
+            <p class="advice-risk">风险提示：{{ advice.riskNote ?? "--" }}</p>
           </article>
         </div>
       </section>
@@ -302,6 +300,7 @@ const props = defineProps<{
 
 type CandlePoint =
   TrendAnalysisPayload["analysis"]["charts"]["candles"][number];
+type Advice = TrendAnalysisPayload["analysis"]["advice"];
 
 defineEmits<{
   retry: [];
@@ -377,8 +376,10 @@ const trendToneClass = computed(() => {
   return "is-neutral";
 });
 
+const advice = computed<Advice>(() => props.analysis?.analysis.advice ?? {});
+
 const adviceToneClass = computed(() => {
-  const action = props.analysis?.analysis.advice.action;
+  const action = advice.value.action;
 
   if (action === "买入") {
     return "tone-bullish";
@@ -410,7 +411,7 @@ function formatMoney(value: number) {
   }).format(value)} 元`;
 }
 
-function formatAdvicePrice(value: number | null) {
+function formatAdvicePrice(value: number | null | undefined) {
   if (value == null) {
     return "--";
   }
